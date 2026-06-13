@@ -1,0 +1,71 @@
+@startuml saga-success
+title NovaMarket - Successful Order Saga Choreography
+
+actor Customer
+participant "Mobile App" as MobileApp
+participant "API Gateway" as ApiGateway
+participant "Order Service" as OrderService
+queue "Kafka" as Kafka
+participant "Inventory Service" as InventoryService
+participant "Payment Service" as PaymentService
+participant "External Payment Gateway" as ExternalPaymentGateway
+participant "Delivery Service" as DeliveryService
+participant "External Logistics Provider" as ExternalLogisticsProvider
+participant "Notification Service" as NotificationService
+participant "Seller Service" as SellerService
+
+Customer -> MobileApp: Confirm order
+MobileApp -> ApiGateway: POST /orders
+ApiGateway -> OrderService: Create order command
+
+activate OrderService
+OrderService -> OrderService: Create order\nstatus = PendingInventory
+OrderService -> Kafka: publish OrderCreated\norderStatus = PendingInventory
+deactivate OrderService
+
+Kafka -> InventoryService: consume OrderCreated
+activate InventoryService
+InventoryService -> InventoryService: Reserve items
+InventoryService -> Kafka: publish InventoryReserved
+deactivate InventoryService
+
+Kafka -> PaymentService: consume InventoryReserved
+activate PaymentService
+PaymentService -> ExternalPaymentGateway: Capture payment
+activate ExternalPaymentGateway
+ExternalPaymentGateway --> PaymentService: Payment approved
+deactivate ExternalPaymentGateway
+PaymentService -> Kafka: publish PaymentSucceeded
+deactivate PaymentService
+
+Kafka -> OrderService: consume PaymentSucceeded
+activate OrderService
+OrderService -> OrderService: Update order\nstatus = Paid
+deactivate OrderService
+
+Kafka -> DeliveryService: consume PaymentSucceeded
+activate DeliveryService
+DeliveryService -> ExternalLogisticsProvider: Create delivery request
+activate ExternalLogisticsProvider
+ExternalLogisticsProvider --> DeliveryService: Delivery request accepted
+deactivate ExternalLogisticsProvider
+DeliveryService -> Kafka: publish DeliveryRequestCreated
+deactivate DeliveryService
+
+Kafka -> OrderService: consume DeliveryRequestCreated
+activate OrderService
+OrderService -> OrderService: Update order\nstatus = SentToDelivery
+deactivate OrderService
+
+Kafka -> NotificationService: consume PaymentSucceeded
+activate NotificationService
+NotificationService -> Customer: Send paid order notification
+NotificationService -> Kafka: publish CustomerNotificationSent
+deactivate NotificationService
+
+Kafka -> SellerService: consume PaymentSucceeded
+activate SellerService
+SellerService -> SellerService: Show new paid order\nready for preparation
+deactivate SellerService
+
+@enduml

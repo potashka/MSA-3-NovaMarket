@@ -1,0 +1,91 @@
+@startuml architecture-c2
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title NovaMarket - C4 Container Diagram
+
+Person(customer, "Customer", "Покупатель, который просматривает каталог, управляет корзиной, оформляет и отслеживает заказ.")
+Person(seller, "Seller", "Продавец, который получает уведомления о новых оплаченных заказах.")
+
+System_Ext(paymentGateway, "External Payment Gateway", "Внешний платежный шлюз для проведения платежей.")
+System_Ext(logisticsProvider, "External Logistics Provider", "Внешний логистический провайдер для создания и отслеживания доставки.")
+
+System_Boundary(novamarket, "NovaMarket") {
+    Container(mobileApp, "Mobile App", "iOS / Android", "Пользовательский интерфейс для покупателей: каталог, корзина, оформление заказа, оплата и отслеживание статуса.")
+
+    Container_Boundary(k8s, "Kubernetes Cluster") {
+        Container(apiGateway, "NGINX API Gateway", "NGINX", "Единая точка входа для мобильного приложения, маршрутизация API-запросов к микросервисам.")
+
+        Container(catalogService, "Catalog Service", "Microservice", "Управляет каталогом товаров, карточками товаров, ценами и данными для быстрого просмотра.")
+        ContainerDb(catalogDb, "Catalog DB", "Database", "Хранит товары, категории, цены и атрибуты каталога.")
+
+        Container(cartService, "Cart Service", "Microservice", "Управляет корзиной покупателя и обеспечивает быстрый отклик UI при добавлении товаров.")
+        ContainerDb(cartDb, "Cart DB", "Database", "Хранит текущие корзины покупателей.")
+
+        Container(orderService, "Order Service", "Microservice", "Создает заказы, управляет жизненным циклом заказа и публикует события заказа.")
+        ContainerDb(orderDb, "Order DB", "Database", "Хранит заказы, статусы и историю изменений заказа.")
+
+        Container(inventoryService, "Inventory Service", "Microservice", "Проверяет доступность товаров и резервирует остатки для заказа.")
+        ContainerDb(inventoryDb, "Inventory DB", "Database", "Хранит остатки товаров и резервы.")
+
+        Container(paymentService, "Payment Service", "Microservice", "Оркестрирует оплату заказа через внешний платежный шлюз и публикует результат платежа.")
+        ContainerDb(paymentDb, "Payment DB", "Database", "Хранит платежи, транзакции и статусы оплаты.")
+
+        Container(deliveryService, "Delivery Service", "Microservice", "Создает заявку на доставку через внешнего логистического провайдера и публикует результат.")
+        ContainerDb(deliveryDb, "Delivery DB", "Database", "Хранит доставки, трекинг и статусы логистики.")
+
+        Container(notificationService, "Notification Service", "Microservice", "Отправляет уведомления покупателям и продавцам по событиям заказа и оплаты.")
+        ContainerDb(notificationDb, "Notification DB", "Database", "Хранит шаблоны, каналы и историю отправки уведомлений.")
+
+        Container(sellerService, "Seller Service", "Microservice", "Управляет продавцами и предоставляет продавцам информацию о новых оплаченных заказах.")
+        ContainerDb(sellerDb, "Seller DB", "Database", "Хранит данные продавцов, настройки и заказы продавцов.")
+
+        Container(reviewService, "Review Service", "Microservice", "Управляет отзывами и рейтингами товаров после покупки.")
+        ContainerDb(reviewDb, "Review DB", "Database", "Хранит отзывы, рейтинги и модерационные статусы.")
+
+        ContainerQueue(kafka, "Apache Kafka", "Event Broker", "Брокер событий для слабосвязанного event-driven взаимодействия и подключения новых сервисов через подписку на события.")
+    }
+}
+
+Rel(customer, mobileApp, "Uses", "HTTPS")
+Rel(seller, sellerService, "Uses seller back office API", "HTTPS")
+
+Rel(mobileApp, apiGateway, "Calls API", "HTTPS / JSON")
+
+Rel(apiGateway, catalogService, "Routes catalog requests", "HTTP")
+Rel(apiGateway, cartService, "Routes cart requests", "HTTP")
+Rel(apiGateway, orderService, "Routes order requests", "HTTP")
+Rel(apiGateway, paymentService, "Routes payment requests", "HTTP")
+Rel(apiGateway, deliveryService, "Routes delivery status requests", "HTTP")
+Rel(apiGateway, reviewService, "Routes review requests", "HTTP")
+
+Rel(catalogService, catalogDb, "Reads and writes", "SQL / NoSQL")
+Rel(cartService, cartDb, "Reads and writes", "SQL / NoSQL")
+Rel(orderService, orderDb, "Reads and writes", "SQL")
+Rel(inventoryService, inventoryDb, "Reads and writes", "SQL")
+Rel(paymentService, paymentDb, "Reads and writes", "SQL")
+Rel(deliveryService, deliveryDb, "Reads and writes", "SQL")
+Rel(notificationService, notificationDb, "Reads and writes", "SQL / NoSQL")
+Rel(sellerService, sellerDb, "Reads and writes", "SQL")
+Rel(reviewService, reviewDb, "Reads and writes", "SQL / NoSQL")
+
+Rel(orderService, kafka, "Publishes OrderCreated", "Kafka event")
+Rel(kafka, inventoryService, "Subscribes to OrderCreated", "Kafka event")
+
+Rel(inventoryService, kafka, "Publishes InventoryReserved or InventoryReservationFailed", "Kafka event")
+Rel(kafka, paymentService, "Subscribes to InventoryReserved", "Kafka event")
+
+Rel(paymentService, paymentGateway, "Processes payment", "HTTPS")
+Rel(paymentService, kafka, "Publishes PaymentSucceeded or PaymentFailed", "Kafka event")
+
+Rel(kafka, deliveryService, "Subscribes to PaymentSucceeded", "Kafka event")
+Rel(deliveryService, logisticsProvider, "Creates delivery request", "HTTPS")
+Rel(deliveryService, kafka, "Publishes DeliveryRequestCreated or DeliveryCreationFailed", "Kafka event")
+
+Rel(kafka, orderService, "Subscribes to inventory, payment and delivery result events", "Kafka event")
+Rel(kafka, notificationService, "Subscribes to PaymentSucceeded and order status events", "Kafka event")
+Rel(kafka, sellerService, "Subscribes to PaymentSucceeded for paid order notifications", "Kafka event")
+Rel(kafka, reviewService, "Subscribes to delivered order events for review eligibility", "Kafka event")
+
+@enduml

@@ -1,0 +1,54 @@
+@startuml saga-payment-failed
+title NovaMarket - Payment Failed Saga Choreography
+
+actor Customer
+participant "Mobile App" as MobileApp
+participant "API Gateway" as ApiGateway
+participant "Order Service" as OrderService
+queue "Kafka" as Kafka
+participant "Inventory Service" as InventoryService
+participant "Payment Service" as PaymentService
+participant "External Payment Gateway" as ExternalPaymentGateway
+participant "Notification Service" as NotificationService
+
+Customer -> MobileApp: Confirm order
+MobileApp -> ApiGateway: POST /orders
+ApiGateway -> OrderService: Create order command
+
+activate OrderService
+OrderService -> OrderService: Create order\nstatus = PendingInventory
+OrderService -> Kafka: publish OrderCreated\norderStatus = PendingInventory
+deactivate OrderService
+
+Kafka -> InventoryService: consume OrderCreated
+activate InventoryService
+InventoryService -> InventoryService: Reserve items
+InventoryService -> Kafka: publish InventoryReserved
+deactivate InventoryService
+
+Kafka -> PaymentService: consume InventoryReserved
+activate PaymentService
+PaymentService -> ExternalPaymentGateway: Capture payment
+activate ExternalPaymentGateway
+ExternalPaymentGateway --> PaymentService: Payment declined
+deactivate ExternalPaymentGateway
+PaymentService -> Kafka: publish PaymentFailed
+deactivate PaymentService
+
+Kafka -> OrderService: consume PaymentFailed
+activate OrderService
+OrderService -> OrderService: Update order\nstatus = Cancelled
+deactivate OrderService
+
+Kafka -> InventoryService: consume PaymentFailed
+activate InventoryService
+InventoryService -> InventoryService: Release reserved items
+InventoryService -> Kafka: publish InventoryReservationReleased
+deactivate InventoryService
+
+Kafka -> NotificationService: consume PaymentFailed
+activate NotificationService
+NotificationService -> Customer: Send cancellation notification\nreason = payment failed
+deactivate NotificationService
+
+@enduml

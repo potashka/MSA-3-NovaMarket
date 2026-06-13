@@ -1,0 +1,85 @@
+@startuml saga-delivery-failed
+title NovaMarket - Delivery Failed Saga Choreography
+
+actor Customer
+participant "Mobile App" as MobileApp
+participant "API Gateway" as ApiGateway
+participant "Order Service" as OrderService
+queue "Kafka" as Kafka
+participant "Inventory Service" as InventoryService
+participant "Payment Service" as PaymentService
+participant "External Payment Gateway" as ExternalPaymentGateway
+participant "Delivery Service" as DeliveryService
+participant "External Logistics Provider" as ExternalLogisticsProvider
+participant "Notification Service" as NotificationService
+
+Customer -> MobileApp: Confirm order
+MobileApp -> ApiGateway: POST /orders
+ApiGateway -> OrderService: Create order command
+
+activate OrderService
+OrderService -> OrderService: Create order\nstatus = PendingInventory
+OrderService -> Kafka: publish OrderCreated\norderStatus = PendingInventory
+deactivate OrderService
+
+Kafka -> InventoryService: consume OrderCreated
+activate InventoryService
+InventoryService -> InventoryService: Reserve items
+InventoryService -> Kafka: publish InventoryReserved
+deactivate InventoryService
+
+Kafka -> PaymentService: consume InventoryReserved
+activate PaymentService
+PaymentService -> ExternalPaymentGateway: Capture payment
+activate ExternalPaymentGateway
+ExternalPaymentGateway --> PaymentService: Payment approved
+deactivate ExternalPaymentGateway
+PaymentService -> Kafka: publish PaymentSucceeded
+deactivate PaymentService
+
+Kafka -> OrderService: consume PaymentSucceeded
+activate OrderService
+OrderService -> OrderService: Update order\nstatus = Paid
+deactivate OrderService
+
+Kafka -> DeliveryService: consume PaymentSucceeded
+activate DeliveryService
+DeliveryService -> ExternalLogisticsProvider: Create delivery request
+activate ExternalLogisticsProvider
+ExternalLogisticsProvider --> DeliveryService: Error or timeout
+deactivate ExternalLogisticsProvider
+DeliveryService -> Kafka: publish DeliveryCreationFailed\ncompensation required
+deactivate DeliveryService
+
+Kafka -> PaymentService: consume DeliveryCreationFailed
+activate PaymentService
+PaymentService -> ExternalPaymentGateway: Refund payment
+activate ExternalPaymentGateway
+ExternalPaymentGateway --> PaymentService: Refund approved
+deactivate ExternalPaymentGateway
+PaymentService -> Kafka: publish RefundSucceeded\ncompensation event
+deactivate PaymentService
+
+Kafka -> InventoryService: consume RefundSucceeded\nor DeliveryCreationFailed
+activate InventoryService
+InventoryService -> InventoryService: Release reserved items
+InventoryService -> Kafka: publish InventoryReservationReleased\ncompensation event
+deactivate InventoryService
+
+Kafka -> OrderService: consume RefundSucceeded
+activate OrderService
+OrderService -> OrderService: Mark refund completed
+deactivate OrderService
+
+Kafka -> OrderService: consume InventoryReservationReleased
+activate OrderService
+OrderService -> OrderService: Update order\nstatus = Cancelled
+deactivate OrderService
+
+Kafka -> NotificationService: consume RefundSucceeded
+Kafka -> NotificationService: consume InventoryReservationReleased
+activate NotificationService
+NotificationService -> Customer: Send cancellation notification\nreason = delivery failed\nrefund = succeeded
+deactivate NotificationService
+
+@enduml

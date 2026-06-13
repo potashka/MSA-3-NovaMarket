@@ -1,0 +1,90 @@
+@startuml architecture-c2-order-history
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title NovaMarket - C4 Container Diagram with Order History Read Model
+
+Person(customer, "Customer", "Покупатель, который просматривает историю покупок, скачивает чеки, оставляет отзывы и повторяет заказы.")
+
+System_Ext(paymentGateway, "External Payment Gateway", "Внешний платежный шлюз для проведения платежей и формирования платежных данных.")
+System_Ext(logisticsProvider, "External Logistics Provider", "Внешний логистический провайдер для доставки и финального статуса заказа.")
+
+System_Boundary(novamarket, "NovaMarket") {
+    Container(mobileApp, "Mobile App", "iOS / Android", "Личный кабинет покупателя: история заказов, состав заказа, чек, отзыв и повторный заказ.")
+
+    Container_Boundary(k8s, "Kubernetes Cluster") {
+        Container(apiGateway, "NGINX API Gateway", "NGINX", "Единая точка входа для мобильного приложения и маршрутизация API-запросов.")
+
+        Container(catalogService, "Catalog Service", "Microservice", "Предоставляет данные каталога и карточки товаров.")
+        ContainerDb(catalogDb, "Catalog DB", "Database", "Хранит товары, категории, цены и атрибуты каталога.")
+
+        Container(cartService, "Cart Service", "Microservice", "Управляет корзиной и поддерживает reorder flow для повторного заказа.")
+        ContainerDb(cartDb, "Cart DB", "Database", "Хранит текущие корзины покупателей.")
+
+        Container(orderService, "Order Service", "Microservice", "Создает заказы, управляет жизненным циклом заказа и публикует события заказа.")
+        ContainerDb(orderDb, "Order DB", "Database", "Хранит операционную модель заказов.")
+
+        Container(inventoryService, "Inventory Service", "Microservice", "Резервирует товары и публикует результат резервирования.")
+        ContainerDb(inventoryDb, "Inventory DB", "Database", "Хранит остатки товаров и резервы.")
+
+        Container(paymentService, "Payment Service", "Microservice", "Обрабатывает платежи и публикует результат оплаты.")
+        ContainerDb(paymentDb, "Payment DB", "Database", "Хранит платежи и транзакции.")
+
+        Container(deliveryService, "Delivery Service", "Microservice", "Создает доставку и публикует логистические статусы заказа.")
+        ContainerDb(deliveryDb, "Delivery DB", "Database", "Хранит доставки и трекинг.")
+
+        Container(receiptService, "Receipt Service", "Microservice", "Создает и предоставляет чеки для скачивания из истории заказов.")
+        ContainerDb(receiptStorage, "Receipt Storage", "Object Storage", "Хранит сформированные чеки и ссылки на документы.")
+
+        Container(reviewService, "Review Service", "Microservice", "Позволяет покупателю оставить отзыв по доставленному заказу.")
+        ContainerDb(reviewDb, "Review DB", "Database", "Хранит отзывы и рейтинги.")
+
+        Container(orderHistoryQueryService, "Order History Query Service", "Microservice", "CQRS query-side сервис для быстрого чтения истории покупок из готовой read-модели без синхронного сбора данных из сервисов.")
+        ContainerDb(orderHistoryReadDb, "Order History Read DB / Materialized View", "Read Database", "Денормализованная read-модель: список заказов, суммы, даты, доставка, оплата, финальный статус, состав заказа, чек, отзыв и reorder data.")
+
+        ContainerQueue(kafka, "Apache Kafka", "Event Broker", "Брокер событий для обновления read-модели и подключения новых подписчиков.")
+    }
+}
+
+Rel(customer, mobileApp, "Uses", "HTTPS")
+
+Rel(mobileApp, apiGateway, "Requests order history, receipt, review and reorder actions", "HTTPS / JSON")
+Rel(apiGateway, orderHistoryQueryService, "GET /me/orders", "HTTP")
+Rel(orderHistoryQueryService, orderHistoryReadDb, "Reads prepared order history read model", "SQL / NoSQL")
+
+Rel(apiGateway, receiptService, "GET /receipts/{receiptId}", "HTTP")
+Rel(receiptService, receiptStorage, "Reads and writes receipts", "Object API")
+
+Rel(apiGateway, reviewService, "POST /reviews", "HTTP")
+Rel(reviewService, reviewDb, "Reads and writes", "SQL / NoSQL")
+
+Rel(apiGateway, cartService, "POST /cart/reorder", "HTTP")
+Rel(cartService, cartDb, "Adds previous order items to cart", "SQL / NoSQL")
+
+Rel(apiGateway, catalogService, "Routes catalog requests", "HTTP")
+Rel(apiGateway, orderService, "Routes order commands", "HTTP")
+
+Rel(catalogService, catalogDb, "Reads and writes", "SQL / NoSQL")
+Rel(orderService, orderDb, "Reads and writes", "SQL")
+Rel(inventoryService, inventoryDb, "Reads and writes", "SQL")
+Rel(paymentService, paymentDb, "Reads and writes", "SQL")
+Rel(deliveryService, deliveryDb, "Reads and writes", "SQL")
+
+Rel(paymentService, paymentGateway, "Processes payment", "HTTPS")
+Rel(deliveryService, logisticsProvider, "Creates and tracks delivery", "HTTPS")
+
+Rel(orderService, kafka, "Publishes OrderCreated, OrderCancelled", "Kafka events")
+Rel(paymentService, kafka, "Publishes PaymentSucceeded, PaymentFailed", "Kafka events")
+Rel(deliveryService, kafka, "Publishes DeliveryRequestCreated, OrderDelivered", "Kafka events")
+Rel(receiptService, kafka, "Publishes ReceiptGenerated", "Kafka event")
+
+Rel(kafka, orderHistoryQueryService, "Consumes OrderCreated, PaymentSucceeded, PaymentFailed, DeliveryRequestCreated, OrderDelivered, OrderCancelled, ReceiptGenerated", "Kafka events")
+Rel(orderHistoryQueryService, orderHistoryReadDb, "Updates materialized view asynchronously", "Projection writes")
+
+Rel(kafka, receiptService, "Consumes PaymentSucceeded to generate receipt", "Kafka event")
+Rel(kafka, reviewService, "Consumes OrderDelivered to enable review", "Kafka event")
+
+Rel(cartService, orderHistoryReadDb, "Reads previous order item snapshot for reorder", "Read model data")
+
+@enduml
