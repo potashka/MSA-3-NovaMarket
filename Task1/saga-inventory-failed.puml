@@ -1,0 +1,38 @@
+@startuml saga-inventory-failed
+title NovaMarket - Inventory Reservation Failed Saga Choreography
+
+actor Customer
+participant "Mobile App" as MobileApp
+participant "API Gateway" as ApiGateway
+participant "Order Service" as OrderService
+queue "Kafka" as Kafka
+participant "Inventory Service" as InventoryService
+participant "Notification Service" as NotificationService
+
+Customer -> MobileApp: Confirm order
+MobileApp -> ApiGateway: POST /orders
+ApiGateway -> OrderService: Create order command
+
+activate OrderService
+OrderService -> OrderService: Create order\nstatus = PendingInventory
+OrderService -> Kafka: publish OrderCreated\norderStatus = PendingInventory
+deactivate OrderService
+
+Kafka -> InventoryService: consume OrderCreated
+activate InventoryService
+InventoryService -> InventoryService: Check item availability\nitems unavailable or insufficient
+InventoryService -> Kafka: publish InventoryReservationFailed
+deactivate InventoryService
+
+Kafka -> OrderService: consume InventoryReservationFailed
+activate OrderService
+OrderService -> OrderService: Update order\nstatus = Cancelled
+OrderService -> Kafka: publish OrderCancelled
+deactivate OrderService
+
+Kafka -> NotificationService: consume InventoryReservationFailed
+activate NotificationService
+NotificationService -> Customer: Send cancellation notification\nreason = items unavailable
+deactivate NotificationService
+
+@enduml
